@@ -61,3 +61,6 @@ Verify the token that was issued in the SWAPPER request.
 Ensure the token issued was used in the Intruder attack.  
 
 ![New Token](/images/new_token.png)  
+
+### Install  
+Need Jython. Under Burp extensions, select add and choose Python as the extension type. Then load swapper.py. That is all there is.    
