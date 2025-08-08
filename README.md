@@ -6,6 +6,11 @@ By default, SWAPPER sends a request to obtain the token/value every 4 minutes. Y
 
 SWAPPER supports pulling multiple patterns out of response and setting multiple patterns to replace.  
 
+## Install  
+Burp Suite needs the Python environment configured. Add the reference to the Jython JAR file in extension settings.  
+
+From the Extensions setting, in the Installed tab, select `add` and choose Python as the extension type. Then load swapper.py. That is all there is. 
+
 ## HOW TO USE:  
 Example from OWASP JuiceShop at `https://juice-shop.herokuapp.com` to get the Bearer token from endpoint, match the request header, and what to update the match with.  
 
@@ -41,9 +46,11 @@ To test the request pattern, in History/Target/Repeater, right click the request
 ![Request Regex Match](/images/status_request_match.png)  
 
 ### Enable tools and auto-refresh as needed  
-- **Enable for Tools** Choose what tools you want SWAPPER to swap out tokens.  
+- **Enable Extension** Start and stop SWAPPER
 
-- **Auto-refresh Settings** Change time to request new token. Disabling `Enabling Auto-refresh` will send a new token request for each request.  
+- **Tools** Choose what tools you want SWAPPER to swap out tokens for.  
+
+- **Enable Auto-refresh** Change time to request new token. Disabling `Enabling Auto-refresh` will send a new token request for each request.  
 
 ![Tools](/images/tools.png)  
 
@@ -60,7 +67,4 @@ Verify the token that was issued in the SWAPPER request.
 
 Ensure the token issued was used in the Intruder attack.  
 
-![New Token](/images/new_token.png)  
-
-### Install  
-Need Jython. Under Burp extensions, select add and choose Python as the extension type. Then load swapper.py. That is all there is.    
+![New Token](/images/new_token.png)    

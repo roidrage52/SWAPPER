@@ -8,7 +8,6 @@ from java.lang import Runnable
 import re
 import threading
 import time
-import Queue
 
 class BurpExtender(IBurpExtender, IHttpListener, ITab, IContextMenuFactory, ActionListener):
     def registerExtenderCallbacks(self, callbacks):
@@ -117,22 +116,17 @@ JSYTJzaX2Ds2ClCwTyz5P4Gjx6CoKwBIdsEspog=
         self.instructions_area.setEditable(False)  
         self.instructions_area.setText("""SWAPPER
                                  
-An extension for easy match/replace of tokens/CSRF/anything using regex. Handles XML and JSON. By default, SWAPPER sends a request to obtain the token/value every 4 minutes. You can change the time to request a new token. Disabling auto-refresh will request a token for each Request(needed every now and again...). A new value will be requested for each interval. There is not logout logic implemented in the tool. Can pull multiple patterns out of Response and set multiple patterns to replace.
+An extension for easy match/replace of tokens/CSRF/anything using regex. Handles XML and JSON. By default, SWAPPER sends a request to obtain the token/value every 4 minutes. You can change the time to request a new token. Disabling auto-refresh will request a token for each request(needed every now and again...). A new value will be requested for each interval. Can pull multiple patterns out of response and set multiple patterns to replace.
         
 HOW TO USE:
 
 1. Right-click on any request in Target/History
 2. Select "Send to Swapper" to populate fields
-3. Modify the request details to create your token request
-4. Set up regex patterns for token extraction/replacement
-5. Test your configuration
-6. Enable tools and auto-refresh as needed
+3. Set up regex patterns for token extraction/replacement
+4. Test your configuration
+5. Enable tools and auto-refresh as needed
 
-Remember to save configuration to update changes.
-
-When using Repeater, the changes will not show. Check Logger/Logger++ to verify replacement. 
-
-Test Token Request will send Request and display in status the regex match. For the Request, go to Request in Proxy history and under extensions, select `Test Request Regex`. Match will show in Status field.
+To check regex matches, Test Token Request will send request and display regex hit/miss in status box. For the request, go to request you want to check in Proxy history/History/Target, right click and under extensions, select `Test Request Regex`. Resulting hit/miss will show in status box.
 """)
         self.instructions_area.setLineWrap(True)
         self.instructions_area.setWrapStyleWord(True)
@@ -202,6 +196,7 @@ Or find the request to send in your history and send to SWAPPER
         button_regex_panel.add(self.add_regex_button)
         regex_section.add(button_regex_panel, BorderLayout.SOUTH)
         self.createRegexPair(0)
+
         control_section = JPanel(BorderLayout())
         control_section.setBorder(BorderFactory.createTitledBorder("Extension Control"))
         control_panel = JPanel(GridBagLayout())
@@ -212,72 +207,46 @@ Or find the request to send in your history and send to SWAPPER
         self.enable_extension_checkbox = JCheckBox("Enable Extension", self.extension_enabled)
         self.enable_extension_checkbox.addActionListener(self)
         control_panel.add(self.enable_extension_checkbox, control_gbc)
-        control_gbc.gridx = 1
-        enable_help = JLabel("Default grabs a token for each request (auto-refresh can override)")
-        control_panel.add(enable_help, control_gbc)
-        control_section.add(control_panel, BorderLayout.CENTER)
-        tools_section = JPanel(BorderLayout())
-        tools_section.setBorder(BorderFactory.createTitledBorder("Enable for Tools"))
-        tools_panel = JPanel(GridBagLayout())
+        control_gbc.gridy = 1
+        tools_sub_panel = JPanel(GridBagLayout())
         tools_gbc = GridBagConstraints()
-        tools_gbc.insets = Insets(3, 3, 3, 3)
+        tools_gbc.insets = Insets(2, 2, 2, 2)
         tools_gbc.anchor = GridBagConstraints.WEST
         tools_gbc.gridx = 0; tools_gbc.gridy = 0
         self.scanner_checkbox = JCheckBox("Scanner", self.enabled_tools['scanner'])
-        tools_panel.add(self.scanner_checkbox, tools_gbc)
+        tools_sub_panel.add(self.scanner_checkbox, tools_gbc)
         tools_gbc.gridx = 1
         self.repeater_checkbox = JCheckBox("Repeater", self.enabled_tools['repeater'])
-        tools_panel.add(self.repeater_checkbox, tools_gbc)
+        tools_sub_panel.add(self.repeater_checkbox, tools_gbc)
         tools_gbc.gridx = 2
         self.intruder_checkbox = JCheckBox("Intruder", self.enabled_tools['intruder'])
-        tools_panel.add(self.intruder_checkbox, tools_gbc)
+        tools_sub_panel.add(self.intruder_checkbox, tools_gbc)
         tools_gbc.gridx = 0; tools_gbc.gridy = 1
         self.target_checkbox = JCheckBox("Target", self.enabled_tools['target'])
-        tools_panel.add(self.target_checkbox, tools_gbc)
+        tools_sub_panel.add(self.target_checkbox, tools_gbc)
         tools_gbc.gridx = 1
         self.sequencer_checkbox = JCheckBox("Sequencer", self.enabled_tools['sequencer'])
-        tools_panel.add(self.sequencer_checkbox, tools_gbc)
+        tools_sub_panel.add(self.sequencer_checkbox, tools_gbc)
         tools_gbc.gridx = 2
         self.extender_checkbox = JCheckBox("Extender", self.enabled_tools['extender'])
-        tools_panel.add(self.extender_checkbox, tools_gbc)
-        tools_section.add(tools_panel, BorderLayout.CENTER)
-        refresh_section = JPanel(BorderLayout())
-        refresh_section.setBorder(BorderFactory.createTitledBorder("Auto-refresh Settings"))
-        refresh_panel = JPanel(GridBagLayout())
+        tools_sub_panel.add(self.extender_checkbox, tools_gbc)
+        control_panel.add(tools_sub_panel, control_gbc)
+        control_gbc.gridx = 1; control_gbc.gridy = 0; control_gbc.gridheight = 2
+        refresh_sub_panel = JPanel(GridBagLayout())
         refresh_gbc = GridBagConstraints()
         refresh_gbc.insets = Insets(3, 3, 3, 3)
         refresh_gbc.anchor = GridBagConstraints.WEST
         refresh_gbc.gridx = 0; refresh_gbc.gridy = 0
         self.auto_refresh_checkbox = JCheckBox("Enable Auto-refresh", self.auto_refresh_enabled)
         self.auto_refresh_checkbox.addActionListener(self)
-        refresh_panel.add(self.auto_refresh_checkbox, refresh_gbc)
-        refresh_gbc.gridx = 1
-        refresh_panel.add(JLabel("Interval (seconds):"), refresh_gbc)
-        refresh_gbc.gridx = 2
+        refresh_sub_panel.add(self.auto_refresh_checkbox, refresh_gbc)
+        refresh_gbc.gridy = 1
+        refresh_sub_panel.add(JLabel("Interval (seconds):"), refresh_gbc)
+        refresh_gbc.gridy = 2
         self.interval_spinner = JSpinner(SpinnerNumberModel(self.refresh_interval, 1, 3600, 1))
-        refresh_panel.add(self.interval_spinner, refresh_gbc)
-        refresh_section.add(refresh_panel, BorderLayout.CENTER)
-        sent_section = JPanel(BorderLayout())
-        sent_section.setBorder(BorderFactory.createTitledBorder("Sent Requests Queue"))
-        sent_panel = JPanel(GridBagLayout())
-        sent_gbc = GridBagConstraints()
-        sent_gbc.insets = Insets(3, 3, 3, 3)
-        sent_gbc.anchor = GridBagConstraints.WEST
-        sent_gbc.gridx = 0; sent_gbc.gridy = 0; sent_gbc.fill = GridBagConstraints.BOTH; sent_gbc.weightx = 1.0; sent_gbc.weighty = 1.0
-        self.sent_requests_area = JTextArea(6, 50)
-        self.sent_requests_area.setEditable(False)
-        sent_requests_scroll = JScrollPane(self.sent_requests_area)
-        sent_panel.add(sent_requests_scroll, sent_gbc)
-        sent_gbc.gridy = 1; sent_gbc.fill = GridBagConstraints.NONE; sent_gbc.weighty = 0
-        sent_button_panel = JPanel()
-        self.process_queue_button = JButton("Process Queue")
-        self.process_queue_button.addActionListener(self)
-        self.clear_queue_button = JButton("Clear Queue")
-        self.clear_queue_button.addActionListener(self)
-        sent_button_panel.add(self.process_queue_button)
-        sent_button_panel.add(self.clear_queue_button)
-        sent_panel.add(sent_button_panel, sent_gbc)
-        sent_section.add(sent_panel, BorderLayout.CENTER)
+        refresh_sub_panel.add(self.interval_spinner, refresh_gbc)
+        control_panel.add(refresh_sub_panel, control_gbc)
+        control_section.add(control_panel, BorderLayout.CENTER)
         button_panel = JPanel()
         self.test_button = JButton("Test Token Request")
         self.test_button.addActionListener(self)
@@ -295,13 +264,9 @@ Or find the request to send in your history and send to SWAPPER
         content_panel.add(control_section, gbc)
         gbc.gridy = 2
         content_panel.add(regex_section, gbc)
-        gbc.gridy = 3
-        content_panel.add(tools_section, gbc)
-        gbc.gridy = 4
-        content_panel.add(refresh_section, gbc)
-        gbc.gridy = 5; gbc.fill = GridBagConstraints.NONE
+        gbc.gridy = 3; gbc.fill = GridBagConstraints.NONE
         content_panel.add(button_panel, gbc)
-        gbc.gridy = 6; gbc.fill = GridBagConstraints.BOTH; gbc.weighty = 1.0
+        gbc.gridy = 4; gbc.fill = GridBagConstraints.BOTH; gbc.weighty = 1.0
         content_panel.add(status_scroll, gbc)
         scroll_pane = JScrollPane(content_panel)
         self.panel.add(scroll_pane, BorderLayout.CENTER)
@@ -479,22 +444,22 @@ Or find the request to send in your history and send to SWAPPER
     def _tokenWorker(self):
         while not getattr(self, 'shutdown_flag', True):
             try:
-                need_refresh = (not hasattr(self, 'current_tokens') or 
-                              not self.current_tokens or 
-                              (not self.auto_refresh_enabled and 
-                               time.time() - getattr(self, 'token_last_updated', 0) > 30))
-                if need_refresh and getattr(self, 'extension_enabled', False):
-                    success = self._getNewTokenSync()
-                    if success:
-                        print("Background token refresh completed")
-                for i in range(50): 
+                if getattr(self, 'auto_refresh_enabled', False):
+                    need_refresh = (not hasattr(self, 'current_tokens') or 
+                                not self.current_tokens or 
+                                time.time() - getattr(self, 'token_last_updated', 0) > self.refresh_interval)
+                    if need_refresh and getattr(self, 'extension_enabled', False):
+                        success = self._getNewTokenSync()
+                        if success:
+                            print("Token refresh completed")
+                for i in range(50):  
                     if getattr(self, 'shutdown_flag', True):
                         break
                     time.sleep(0.1)
             except Exception as e:
-                print("Token worker error: %s" % str(e))
+                print("Token error: %s" % str(e))
                 time.sleep(1)
-        print("Token worker thread stopped")
+        print("Token thread stopped")
 
     def _getNewTokenSync(self):
         try:
@@ -793,7 +758,7 @@ class TokenRefreshTask(Runnable):
         self.extender = extender
     def run(self):
         try:
-            token = self.extender.getNewToken()
+            token = self.extender._getNewTokenSync()
             if token:
                 self.extender.addStatus("Got new token")
             else:
