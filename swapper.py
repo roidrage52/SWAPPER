@@ -126,9 +126,7 @@ HOW TO USE:
 4. Test your configuration
 5. Enable tools and auto-refresh as needed
 
-To check regex matches, Test Token Request will send request and display regex hit/miss in status box. For the request, go to request you want to check in Proxy history/History/Target, right click and under extensions, select `Test Request Regex`. Resulting hit/miss will show in status box.
-                                       
-When using to match and replace Cookie values, your regex will need to account for carriage returns (\\r). Example: Set-Cookie:\\s*value\\.cookie=([^;\\r\\n]+) 
+To check regex matches, Test Token Request will send request and display regex hit/miss in status box. For the request, go to request you want to check in Proxy history/History/Target, right click and under extensions, select `Test Request Regex`. Resulting hit/miss will show in status box.                                  
 """)
         self.instructions_area.setLineWrap(True)
         self.instructions_area.setWrapStyleWord(True)
@@ -428,10 +426,13 @@ Or find the request to send in your history and send to SWAPPER
         new_text = "[%s] %s\n%s" % (timestamp, message, current_text)
         self.status_area.setText(new_text)
 
-    # def cleanHttpResponse(self, response_string):
-    #     cleaned = response_string.replace('\r\n', '\n').replace('\r', '\n')
-    #     lines = [line.rstrip() for line in cleaned.split('\n')]
-    #     return '\n'.join(lines)
+    def cleanHttpResponse(self, response_string):
+        cleaned = response_string.replace('\r\n', '\n').replace('\r', '\n')
+        return cleaned
+
+    def cleanHttpRequest(self, request_string):
+        cleaned = request_string.replace('\r\n', '\n').replace('\r', '\n')
+        return cleaned
 
     def startBackgroundWorker(self):
         if not hasattr(self, 'token_worker_thread') or self.token_worker_thread is None or not self.token_worker_thread.isAlive():
@@ -494,6 +495,7 @@ Or find the request to send in your history and send to SWAPPER
             if response is None:
                 return False
             resp_str = self.helpers.bytesToString(response.getResponse())
+            resp_str_clean = self.cleanHttpResponse(resp_str)
             enabled_pairs = []
             for i, pair_data in enumerate(self.regex_pair_panels):
                 if pair_data['enabled'].isSelected():
@@ -506,7 +508,7 @@ Or find the request to send in your history and send to SWAPPER
                 if not pattern:
                     continue
                 try:
-                    match = re.search(pattern, resp_str, re.IGNORECASE)
+                    match = re.search(pattern, resp_str_clean, re.IGNORECASE)
                     if match and len(match.groups()) > 0:
                         token = match.group(1).strip()
                         extracted_tokens[pair_index] = token
@@ -629,34 +631,40 @@ Or find the request to send in your history and send to SWAPPER
             return
         req = messageInfo.getRequest()
         req_str = self.helpers.bytesToString(req)
+        req_str_clean = self.cleanHttpRequest(req_str)
         replaced_count = 0
         matching_pairs = []
         for pair_index, pair_data in enumerate(self.regex_pair_panels):
             if pair_data['enabled'].isSelected():
                 request_pattern = pair_data['request_field'].getText().strip()
-                if request_pattern and re.search(request_pattern, req_str):
+                if request_pattern and re.search(request_pattern, req_str_clean):
                     matching_pairs.append((pair_index, pair_data, request_pattern))
         if not matching_pairs:
             return 
-        need_fresh_tokens = True
+        need_fresh_tokens = not self.auto_refresh_enabled
         if self.auto_refresh_enabled:
             with self.token_lock:
                 current_time = time.time()
-                if (hasattr(self, 'current_tokens') and self.current_tokens and 
-                    (current_time - getattr(self, 'token_last_updated', 0)) < self.refresh_interval):
-                    need_fresh_tokens = False
+                if (not hasattr(self, 'current_tokens') or not self.current_tokens or 
+                    (current_time - getattr(self, 'token_last_updated', 0)) >= self.refresh_interval):
+                    need_fresh_tokens = True
         if need_fresh_tokens:
             tokens_result = self._getNewTokenSync() 
             if not tokens_result:
-                return  
+                with self.token_lock:
+                    if not (hasattr(self, 'current_tokens') and self.current_tokens):
+                        return  
         with self.token_lock:
             if hasattr(self, 'current_tokens') and self.current_tokens:
                 for pair_index, pair_data, request_pattern in matching_pairs:
                     if pair_index in self.current_tokens:
                         token_for_this_pair = self.current_tokens[pair_index]
                         replacement = pair_data['replacement_field'].getText().replace('{token}', token_for_this_pair)
-                        req_str = re.sub(request_pattern, replacement, req_str)
-                        replaced_count += 1
+                        original_match = re.search(request_pattern.replace('\\r\\n', '\\r?\\n?'), req_str)
+                        if original_match:
+                            old_value = original_match.group(0)
+                            req_str = req_str.replace(old_value, replacement)
+                            replaced_count += 1
         if replaced_count > 0:
             messageInfo.setRequest(self.helpers.stringToBytes(req_str))
         
