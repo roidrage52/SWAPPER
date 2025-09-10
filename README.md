@@ -57,6 +57,8 @@ To test the request pattern, in History/Target/Repeater, right click the request
 ### Troubleshooting  
 Remember to save configuration to update changes. Be sure to check Logger/Logger++ to verify your requests are being updated.  
 
+When using to match and replace Cookie values, your regex will need to account for carriage returns `\r`. Example: `Set-Cookie:\s*value\.cookie=([^;\r\n]+)`  
+
 The image below shows SWAPPER sending a request to endpoint `/rest/user/login` and then Intruder sending payloads to the search endpoint.  
 
 ![Logger](/images/logger.png)  

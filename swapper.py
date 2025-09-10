@@ -127,6 +127,8 @@ HOW TO USE:
 5. Enable tools and auto-refresh as needed
 
 To check regex matches, Test Token Request will send request and display regex hit/miss in status box. For the request, go to request you want to check in Proxy history/History/Target, right click and under extensions, select `Test Request Regex`. Resulting hit/miss will show in status box.
+                                       
+When using to match and replace Cookie values, your regex will need to account for carriage returns `\r`. Example: `Set-Cookie:\s*value\.cookie=([^;\r\n]+)`  
 """)
         self.instructions_area.setLineWrap(True)
         self.instructions_area.setWrapStyleWord(True)
@@ -426,10 +428,10 @@ Or find the request to send in your history and send to SWAPPER
         new_text = "[%s] %s\n%s" % (timestamp, message, current_text)
         self.status_area.setText(new_text)
 
-    def cleanHttpResponse(self, response_string):
-        cleaned = response_string.replace('\r\n', '\n').replace('\r', '\n')
-        lines = [line.rstrip() for line in cleaned.split('\n')]
-        return '\n'.join(lines)
+    # def cleanHttpResponse(self, response_string):
+    #     cleaned = response_string.replace('\r\n', '\n').replace('\r', '\n')
+    #     lines = [line.rstrip() for line in cleaned.split('\n')]
+    #     return '\n'.join(lines)
 
     def startBackgroundWorker(self):
         if not hasattr(self, 'token_worker_thread') or self.token_worker_thread is None or not self.token_worker_thread.isAlive():
@@ -492,7 +494,6 @@ Or find the request to send in your history and send to SWAPPER
             if response is None:
                 return False
             resp_str = self.helpers.bytesToString(response.getResponse())
-            resp_str = self.cleanHttpResponse(resp_str)
             enabled_pairs = []
             for i, pair_data in enumerate(self.regex_pair_panels):
                 if pair_data['enabled'].isSelected():
