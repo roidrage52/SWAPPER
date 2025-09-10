@@ -426,6 +426,11 @@ Or find the request to send in your history and send to SWAPPER
         new_text = "[%s] %s\n%s" % (timestamp, message, current_text)
         self.status_area.setText(new_text)
 
+    def cleanHttpResponse(self, response_string):
+        cleaned = response_string.replace('\r\n', '\n').replace('\r', '\n')
+        lines = [line.rstrip() for line in cleaned.split('\n')]
+        return '\n'.join(lines)
+
     def startBackgroundWorker(self):
         if not hasattr(self, 'token_worker_thread') or self.token_worker_thread is None or not self.token_worker_thread.isAlive():
             self.shutdown_flag = False
@@ -487,6 +492,7 @@ Or find the request to send in your history and send to SWAPPER
             if response is None:
                 return False
             resp_str = self.helpers.bytesToString(response.getResponse())
+            resp_str = self.cleanHttpResponse(resp_str)
             enabled_pairs = []
             for i, pair_data in enumerate(self.regex_pair_panels):
                 if pair_data['enabled'].isSelected():
