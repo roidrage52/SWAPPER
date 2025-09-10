@@ -128,7 +128,7 @@ HOW TO USE:
 
 To check regex matches, Test Token Request will send request and display regex hit/miss in status box. For the request, go to request you want to check in Proxy history/History/Target, right click and under extensions, select `Test Request Regex`. Resulting hit/miss will show in status box.
                                        
-When using to match and replace Cookie values, your regex will need to account for carriage returns `\r`. Example: `Set-Cookie:\s*value\.cookie=([^;\r\n]+)`  
+When using to match and replace Cookie values, your regex will need to account for carriage returns (\\r). Example: Set-Cookie:\\s*value\\.cookie=([^;\\r\\n]+) 
 """)
         self.instructions_area.setLineWrap(True)
         self.instructions_area.setWrapStyleWord(True)
