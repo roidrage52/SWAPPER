@@ -1,10 +1,16 @@
 # SWAPPER
 
-A Burp Suite Extension for easy match/replace of tokens/CSRF/anything using regex. Handles XML and JSON.  
+A Burp Suite Extension for automated match and replace of tokens, CSRF values, and authentication headers using regex pattern matching. **Supports both XML and JSON formats**.
 
-By default, SWAPPER sends a request to obtain the token/value every 4 minutes. You can change the time to request a new token. Disabling auto-refresh will request a token for each request (needed every now and again...). There is no logout logic implemented in the tool.  
+### Features
+- **Automatic token refresh:** Fetches fresh tokens every 4 minutes (240 seconds) by default  - adjustable based on token TTL. Has a per-request refresh that can be used for strict validation scenarios.
+- **Multipe pattern extraction:** SWAPPER supports multiple match/replace patterns. Use as many patterns as you want
+- **Regex matching:** Because who doesn't love using regex!  
 
-SWAPPER supports pulling multiple patterns out of response and setting multiple patterns to replace.  
+### Use Cases
+- **XML:** SOAP API, Legacy systems, SAML
+- **JSON:** OAuth 2.0, REST APIs, GraphQL authentication, Microsoft Graph API
+- **Advanced Patterns:** CSRF bypassing, MFA flows, per-request mode when session token is invalidated after single use
 
 ## Install  
 Burp Suite needs the Python environment configured. Add the reference to the Jython JAR file in extension settings.  
