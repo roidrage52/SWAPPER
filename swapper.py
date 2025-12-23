@@ -658,7 +658,7 @@ Or find the request to send in your history and send to SWAPPER
             if hasattr(self, 'current_tokens') and self.current_tokens:
                 for pair_index, pair_data, request_pattern in matching_pairs:
                     if pair_index in self.current_tokens:
-                        token_for_this_pair = self.current_tokens[pair_index]
+                        token_for_this_pair = self.current_tokens.pop(pair_index)
                         replacement = pair_data['replacement_field'].getText().replace('{token}', token_for_this_pair)
                         original_match = re.search(request_pattern.replace('\\r\\n', '\\r?\\n?'), req_str)
                         if original_match:
