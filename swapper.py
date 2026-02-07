@@ -1,24 +1,23 @@
 # -*- coding: utf-8 -*-
-from burp import IBurpExtender, IHttpListener, ITab, IContextMenuFactory
+from burp import IBurpExtender, IHttpListener, ITab, IContextMenuFactory, IExtensionStateListener
 from java.awt import BorderLayout, GridBagLayout, GridBagConstraints, Insets, Dimension
-from javax.swing import JPanel, JLabel, JTextField, JTextArea, JCheckBox, JButton, JScrollPane, BorderFactory, JSpinner, SpinnerNumberModel, JMenuItem
+from javax.swing import JPanel, JLabel, JTextField, JTextArea, JCheckBox, JButton, JScrollPane, BorderFactory, JSpinner, SpinnerNumberModel, JMenuItem, SwingUtilities, Timer as SwingTimer
 from java.awt.event import ActionListener
-from java.util.concurrent import Executors, TimeUnit
 from java.lang import Runnable
 import re
 import threading
 import time
 
-class BurpExtender(IBurpExtender, IHttpListener, ITab, IContextMenuFactory, ActionListener):
+class BurpExtender(IBurpExtender, IHttpListener, ITab, IContextMenuFactory, IExtensionStateListener, ActionListener):
     def registerExtenderCallbacks(self, callbacks):
         self.callbacks = callbacks
         self.helpers = callbacks.getHelpers()
         callbacks.setExtensionName("SWAPPER")
         callbacks.registerHttpListener(self)
         callbacks.registerContextMenuFactory(self)
+        callbacks.registerExtensionStateListener(self)
         self.token_lock = threading.Lock()
-        self.shutdown_flag = False
-        self.token_worker_thread = None
+        self.refresh_timer = None  
         self.token_request_config = {
             'host': 'the.host.net',
             'port': 443,
@@ -45,16 +44,14 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IContextMenuFactory, Acti
         self.extension_enabled = False
         self.auto_refresh_enabled = True
         self.refresh_interval = 240   
-        self.scheduler = None
         self.current_token = None
         self.current_tokens = {} 
         self.token_last_updated = 0
         self.createGUI()
         callbacks.addSuiteTab(self)
-        self.startBackgroundWorker()
-        print("Started SWAPPER");
-        print("Author: Dave Blandford");
-        print("Email: dave@mailo.com");
+        print("Started SWAPPER")
+        print("Author: Dave Blandford")
+        print("Email: dave@mailo.com")
         print(
         '''
 -----BEGIN PGP PUBLIC KEY BLOCK-----
@@ -98,6 +95,46 @@ JSYTJzaX2Ds2ClCwTyz5P4Gjx6CoKwBIdsEspog=
 -----END PGP PUBLIC KEY BLOCK-----
         '''
         )
+
+    def extensionUnloaded(self):
+        print("SWAPPER: Unloading extension, cleaning up...")
+        self._stopRefreshTimer()
+        print("SWAPPER: Cleanup complete.")
+
+    def _startRefreshTimer(self):
+        self._stopRefreshTimer()
+        interval_ms = self.refresh_interval * 1000
+        self.refresh_timer = SwingTimer(interval_ms, RefreshTimerListener(self))
+        self.refresh_timer.setInitialDelay(0)   
+        self.refresh_timer.start()
+
+    def _stopRefreshTimer(self):
+        if self.refresh_timer is not None:
+            self.refresh_timer.stop()
+            self.refresh_timer = None
+
+    def _onRefreshTimerFire(self):
+        if not self.extension_enabled or not self.auto_refresh_enabled:
+            return
+        t = threading.Thread(target=self._refreshTokenBackground)
+        t.daemon = True
+        t.start()
+
+    def _refreshTokenBackground(self):
+        try:
+            success = self._getNewTokenSync()
+            if success:
+                self.addStatus("Auto-refresh: got new token")
+            else:
+                self.addStatus("Auto-refresh: failed to get token")
+        except Exception as e:
+            self.addStatus("Auto-refresh error: %s" % str(e))
+
+    def _syncTimerState(self):
+        if self.extension_enabled and self.auto_refresh_enabled:
+            self._startRefreshTimer()
+        else:
+            self._stopRefreshTimer()
     
     def createGUI(self):
         self.panel = JPanel(BorderLayout())
@@ -351,7 +388,7 @@ Or find the request to send in your history and send to SWAPPER
             tokens_result = self._getNewTokenSync()
             if tokens_result:
                 with self.token_lock:
-                    if hasattr(self, 'current_tokens') and self.current_tokens:
+                    if self.current_tokens:
                         self.addStatus("Got %d tokens total:" % len(self.current_tokens))
                         for pair_index, token_value in self.current_tokens.items():
                             self.addStatus("  Pair %d token: %s" % (pair_index + 1, token_value))
@@ -365,10 +402,10 @@ Or find the request to send in your history and send to SWAPPER
     def toggleExtension(self):
         self.extension_enabled = self.enable_extension_checkbox.isSelected()
         if self.extension_enabled:
-            self.startBackgroundWorker()  
+            self._syncTimerState()
             self.addStatus("Extension ENABLED - will process requests")
         else:
-            self.stopBackgroundWorker()  
+            self._syncTimerState()
             self.addStatus("Extension DISABLED - will not process requests")
     
     def saveConfiguration(self):
@@ -388,38 +425,20 @@ Or find the request to send in your history and send to SWAPPER
         self.enabled_tools['target'] = self.target_checkbox.isSelected()
         self.enabled_tools['sequencer'] = self.sequencer_checkbox.isSelected()
         self.enabled_tools['extender'] = self.extender_checkbox.isSelected()
+        old_interval = self.refresh_interval
         self.refresh_interval = self.interval_spinner.getValue()
+        if old_interval != self.refresh_interval and self.refresh_timer is not None:
+            self._syncTimerState()
         self.addStatus("Configuration saved successfully")
     
     def toggleAutoRefresh(self):
         self.auto_refresh_enabled = self.auto_refresh_checkbox.isSelected()
+        self._syncTimerState()
         if self.auto_refresh_enabled:
-            self.startAutoRefresh()
             self.addStatus("Auto-refresh enabled with %d second interval" % self.refresh_interval)
         else:
-            self.stopAutoRefresh()
             self.addStatus("Auto-refresh disabled")
 
-    def startAutoRefresh(self):
-        if self.scheduler and not self.scheduler.isShutdown():
-            self.scheduler.shutdown()
-            try:
-                self.scheduler.awaitTermination(2, TimeUnit.SECONDS)  
-            except:
-                pass
-        self.scheduler = Executors.newScheduledThreadPool(1)
-        self.scheduler.scheduleAtFixedRate(
-            TokenRefreshTask(self), 
-            0, 
-            self.refresh_interval, 
-            TimeUnit.SECONDS
-        )
-    
-    def stopAutoRefresh(self):
-        if self.scheduler:
-            self.scheduler.shutdown()
-            self.scheduler = None
-    
     def addStatus(self, message):
         current_text = self.status_area.getText()
         timestamp = time.strftime("%H:%M:%S")
@@ -433,41 +452,6 @@ Or find the request to send in your history and send to SWAPPER
     def cleanHttpRequest(self, request_string):
         cleaned = request_string.replace('\r\n', '\n').replace('\r', '\n')
         return cleaned
-
-    def startBackgroundWorker(self):
-        if not hasattr(self, 'token_worker_thread') or self.token_worker_thread is None or not self.token_worker_thread.isAlive():
-            self.shutdown_flag = False
-            self.token_worker_thread = threading.Thread(target=self._tokenWorker)
-            self.token_worker_thread.daemon = True
-            self.token_worker_thread.start()
-
-    def stopBackgroundWorker(self):
-        self.shutdown_flag = True
-        if hasattr(self, 'token_worker_thread') and self.token_worker_thread and self.token_worker_thread.isAlive():
-            for i in range(50): 
-                if not self.token_worker_thread.isAlive():
-                    break
-                time.sleep(0.1)
-
-    def _tokenWorker(self):
-        while not getattr(self, 'shutdown_flag', True):
-            try:
-                if getattr(self, 'auto_refresh_enabled', False):
-                    need_refresh = (not hasattr(self, 'current_tokens') or 
-                                not self.current_tokens or 
-                                time.time() - getattr(self, 'token_last_updated', 0) > self.refresh_interval)
-                    if need_refresh and getattr(self, 'extension_enabled', False):
-                        success = self._getNewTokenSync()
-                        if success:
-                            print("Token refresh completed")
-                for i in range(50):  
-                    if getattr(self, 'shutdown_flag', True):
-                        break
-                    time.sleep(0.1)
-            except Exception as e:
-                print("Token error: %s" % str(e))
-                time.sleep(1)
-        print("Token thread stopped")
 
     def _getNewTokenSync(self):
         try:
@@ -645,17 +629,17 @@ Or find the request to send in your history and send to SWAPPER
         if self.auto_refresh_enabled:
             with self.token_lock:
                 current_time = time.time()
-                if (not hasattr(self, 'current_tokens') or not self.current_tokens or 
-                    (current_time - getattr(self, 'token_last_updated', 0)) >= self.refresh_interval):
+                if (not self.current_tokens or 
+                    (current_time - self.token_last_updated) >= self.refresh_interval):
                     need_fresh_tokens = True
         if need_fresh_tokens:
             tokens_result = self._getNewTokenSync() 
             if not tokens_result:
                 with self.token_lock:
-                    if not (hasattr(self, 'current_tokens') and self.current_tokens):
+                    if not self.current_tokens:
                         return  
         with self.token_lock:
-            if hasattr(self, 'current_tokens') and self.current_tokens:
+            if self.current_tokens:
                 for pair_index, pair_data, request_pattern in matching_pairs:
                     if pair_index in self.current_tokens:
                         token_for_this_pair = self.current_tokens.pop(pair_index)
@@ -758,7 +742,15 @@ Or find the request to send in your history and send to SWAPPER
                 self.addStatus("Request preview: %s..." % req_str[:300])
         except Exception as e:
             self.addStatus("ERROR testing regex: %s" % str(e))   
-		    
+
+
+class RefreshTimerListener(ActionListener):
+    def __init__(self, extender):
+        self.extender = extender
+    def actionPerformed(self, event):
+        self.extender._onRefreshTimerFire()
+
+
 class TokenMenuHandler(ActionListener):
     def __init__(self, extender, invocation):
         self.extender = extender
@@ -768,19 +760,7 @@ class TokenMenuHandler(ActionListener):
         if selected_messages and len(selected_messages) > 0:
             self.extender.populateFromRequest(selected_messages[0])
 
-class TokenRefreshTask(Runnable):
-    def __init__(self, extender):
-        self.extender = extender
-    def run(self):
-        try:
-            token = self.extender._getNewTokenSync()
-            if token:
-                self.extender.addStatus("Got new token")
-            else:
-                self.extender.addStatus("Failed to get token")
-        except Exception as e:
-            self.extender.addStatus("Auto-refresh error: %s" % str(e))
-            
+
 class RegexTestHandler(ActionListener):
     def __init__(self, extender, invocation):
         self.extender = extender
