@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 from burp import IBurpExtender, IHttpListener, ITab, IContextMenuFactory, IExtensionStateListener
-from java.awt import BorderLayout, GridBagLayout, GridBagConstraints, Insets, Dimension
-from javax.swing import JPanel, JLabel, JTextField, JTextArea, JCheckBox, JButton, JScrollPane, BorderFactory, JSpinner, SpinnerNumberModel, JMenuItem, SwingUtilities, Timer as SwingTimer
+from java.awt import BorderLayout, GridBagLayout, GridBagConstraints, Insets, Dimension, Color
+from javax.swing import JPanel, JLabel, JTextField, JTextArea, JCheckBox, JButton, JScrollPane, BorderFactory, JSpinner, SpinnerNumberModel, JMenuItem, SwingUtilities
 from java.awt.event import ActionListener
-from java.lang import Runnable
+from java.util.concurrent import Executors, TimeUnit
+from javax.swing.event import DocumentListener as JDocumentListener, ChangeListener as JChangeListener
 import re
 import threading
 import time
@@ -17,7 +18,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IContextMenuFactory, IExt
         callbacks.registerContextMenuFactory(self)
         callbacks.registerExtensionStateListener(self)
         self.token_lock = threading.Lock()
-        self.refresh_timer = None  
+        self.scheduler = None
         self.token_request_config = {
             'host': 'the.host.net',
             'port': 443,
@@ -47,10 +48,12 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IContextMenuFactory, IExt
         self.current_token = None
         self.current_tokens = {} 
         self.token_last_updated = 0
+        self._unsaved_changes = False
         self.createGUI()
         callbacks.addSuiteTab(self)
         print("Started SWAPPER")
         print("Author: Dave Blandford")
+        print("Twitter: @hackr1ot")
         print("Email: dave@mailo.com")
         print(
         '''
@@ -103,38 +106,53 @@ JSYTJzaX2Ds2ClCwTyz5P4Gjx6CoKwBIdsEspog=
 
     def _startRefreshTimer(self):
         self._stopRefreshTimer()
-        interval_ms = self.refresh_interval * 1000
-        self.refresh_timer = SwingTimer(interval_ms, RefreshTimerListener(self))
-        self.refresh_timer.setInitialDelay(0)   
-        self.refresh_timer.start()
+        self.scheduler = Executors.newSingleThreadScheduledExecutor()
+        self.scheduler.scheduleAtFixedRate(
+            ScheduledRefreshTask(self),
+            0,
+            self.refresh_interval,
+            TimeUnit.SECONDS
+        )
 
     def _stopRefreshTimer(self):
-        if self.refresh_timer is not None:
-            self.refresh_timer.stop()
-            self.refresh_timer = None
+        if self.scheduler is not None:
+            self.scheduler.shutdownNow()
+            self.scheduler = None
 
     def _onRefreshTimerFire(self):
         if not self.extension_enabled or not self.auto_refresh_enabled:
             return
-        t = threading.Thread(target=self._refreshTokenBackground)
-        t.daemon = True
-        t.start()
-
-    def _refreshTokenBackground(self):
         try:
             success = self._getNewTokenSync()
             if success:
-                self.addStatus("Auto-refresh: got new token")
+                self.addStatus("got new token")
             else:
-                self.addStatus("Auto-refresh: failed to get token")
+                self.addStatus("failed to get token")
         except Exception as e:
-            self.addStatus("Auto-refresh error: %s" % str(e))
+            self.addStatus("error: %s" % str(e))
 
     def _syncTimerState(self):
         if self.extension_enabled and self.auto_refresh_enabled:
             self._startRefreshTimer()
         else:
             self._stopRefreshTimer()
+
+    def _markUnsaved(self):
+        if not self._unsaved_changes:
+            self._unsaved_changes = True
+            self.save_button.setText("Save Configuration (unsaved changes)")
+            self.save_button.setForeground(Color(0x8B, 0x00, 0x00))
+
+    def _markSaved(self):
+        self._unsaved_changes = False
+        self.save_button.setText("Save Configuration")
+        self.save_button.setForeground(None)
+
+    def _attachChangeListener(self, component):
+        component.addActionListener(UnsavedChangeListener(self))
+
+    def _attachDocChangeListener(self, text_component):
+        text_component.getDocument().addDocumentListener(UnsavedDocListener(self))
     
     def createGUI(self):
         self.panel = JPanel(BorderLayout())
@@ -291,6 +309,7 @@ Or find the request to send in your history and send to SWAPPER
         self.save_button.addActionListener(self)
         button_panel.add(self.test_button)
         button_panel.add(self.save_button)
+        self._markUnsaved()
         self.status_area = JTextArea(5, 50)
         self.status_area.setEditable(False)
         status_scroll = JScrollPane(self.status_area)
@@ -307,6 +326,18 @@ Or find the request to send in your history and send to SWAPPER
         content_panel.add(status_scroll, gbc)
         scroll_pane = JScrollPane(content_panel)
         self.panel.add(scroll_pane, BorderLayout.CENTER)
+        self._attachDocChangeListener(self.host_field)
+        self._attachDocChangeListener(self.port_field)
+        self._attachChangeListener(self.https_checkbox)
+        self._attachDocChangeListener(self.headers_area)
+        self._attachDocChangeListener(self.body_area)
+        self._attachChangeListener(self.scanner_checkbox)
+        self._attachChangeListener(self.repeater_checkbox)
+        self._attachChangeListener(self.intruder_checkbox)
+        self._attachChangeListener(self.target_checkbox)
+        self._attachChangeListener(self.sequencer_checkbox)
+        self._attachChangeListener(self.extender_checkbox)
+        self.interval_spinner.addChangeListener(UnsavedSpinnerListener(self))
 
     def createRegexPair(self, index):
         pair_panel = JPanel(GridBagLayout())
@@ -333,6 +364,10 @@ Or find the request to send in your history and send to SWAPPER
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0
         replacement_field = JTextField(self.regex_pairs[index]['replacement'] if index < len(self.regex_pairs) else '{token}', 25)
         pair_panel.add(replacement_field, gbc)
+        self._attachDocChangeListener(response_field)
+        self._attachDocChangeListener(request_field)
+        self._attachDocChangeListener(replacement_field)
+        self._attachChangeListener(enable_checkbox)
         pair_data = {
             'panel': pair_panel,
             'enabled': enable_checkbox,
@@ -376,6 +411,7 @@ Or find the request to send in your history and send to SWAPPER
         new_index = len(self.regex_pair_panels)
         self.regex_pairs.append({'response': '', 'request': '', 'replacement': '{token}'})
         self.createRegexPair(new_index)
+        self._markUnsaved()
     
     def testTokenRequest(self):
         self.addStatus("Testing token request...")
@@ -403,10 +439,10 @@ Or find the request to send in your history and send to SWAPPER
         self.extension_enabled = self.enable_extension_checkbox.isSelected()
         if self.extension_enabled:
             self._syncTimerState()
-            self.addStatus("Extension ENABLED - will process requests")
+            self.addStatus("Extension ENABLED")
         else:
             self._syncTimerState()
-            self.addStatus("Extension DISABLED - will not process requests")
+            self.addStatus("Extension DISABLED")
     
     def saveConfiguration(self):
         self.token_request_config['host'] = self.host_field.getText()
@@ -427,8 +463,9 @@ Or find the request to send in your history and send to SWAPPER
         self.enabled_tools['extender'] = self.extender_checkbox.isSelected()
         old_interval = self.refresh_interval
         self.refresh_interval = self.interval_spinner.getValue()
-        if old_interval != self.refresh_interval and self.refresh_timer is not None:
+        if old_interval != self.refresh_interval and self.scheduler is not None:
             self._syncTimerState()
+        self._markSaved()
         self.addStatus("Configuration saved successfully")
     
     def toggleAutoRefresh(self):
@@ -710,6 +747,7 @@ Or find the request to send in your history and send to SWAPPER
                 self.body_area.setText(body_text)
             else:
                 self.body_area.setText("")
+            self._markUnsaved()
             self.addStatus("Populated configuration from %s %s://%s:%s" % (request_info.getMethod(), service.getProtocol(), host, port)) 
         except Exception as e:
             self.addStatus("Error populating from request: %s" % str(e))
@@ -744,11 +782,38 @@ Or find the request to send in your history and send to SWAPPER
             self.addStatus("ERROR testing regex: %s" % str(e))   
 
 
-class RefreshTimerListener(ActionListener):
+from java.lang import Runnable
+
+class ScheduledRefreshTask(Runnable):
+    def __init__(self, extender):
+        self.extender = extender
+    def run(self):
+        self.extender._onRefreshTimerFire()
+
+
+class UnsavedChangeListener(ActionListener):
     def __init__(self, extender):
         self.extender = extender
     def actionPerformed(self, event):
-        self.extender._onRefreshTimerFire()
+        self.extender._markUnsaved()
+
+
+class UnsavedDocListener(JDocumentListener):
+    def __init__(self, extender):
+        self.extender = extender
+    def insertUpdate(self, event):
+        self.extender._markUnsaved()
+    def removeUpdate(self, event):
+        self.extender._markUnsaved()
+    def changedUpdate(self, event):
+        self.extender._markUnsaved()
+
+
+class UnsavedSpinnerListener(JChangeListener):
+    def __init__(self, extender):
+        self.extender = extender
+    def stateChanged(self, event):
+        self.extender._markUnsaved()
 
 
 class TokenMenuHandler(ActionListener):
