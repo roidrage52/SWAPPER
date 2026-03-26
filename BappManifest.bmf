@@ -7,7 +7,7 @@ SerialVersion: 1
 MinPlatformVersion: 2
 ProOnly: False
 Author: roidrage52
-ShortDescription: An extension for Burp Suite that automates the matching and replacing of tokens, CSRF values, and authentication headers using regex. It supports both XML and JSON formats.
+ShortDescription: Automates the match and replace of tokens, CSRF values, and authentication headers across Burp Suite tools.
 EntryPoint: swapper.py
 BuildCommand: 
 SupportedProducts: Pro, Community
