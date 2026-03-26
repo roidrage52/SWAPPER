@@ -1,0 +1,13 @@
+Uuid: 0077e9930f0147679b6c5ddbedac52be
+ExtensionType: 2
+Name: Swapper
+RepoName: swapper
+ScreenVersion: 1.0.0
+SerialVersion: 1
+MinPlatformVersion: 2
+ProOnly: False
+Author: roidrage52
+ShortDescription: An extension for Burp Suite that automates the matching and replacing of tokens, CSRF values, and authentication headers using regex. It supports both XML and JSON formats.
+EntryPoint: swapper.py
+BuildCommand: 
+SupportedProducts: Pro, Community

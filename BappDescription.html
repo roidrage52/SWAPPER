@@ -1,0 +1,21 @@
+<p>SWAPPER is a Burp Suite Extension that automates the match and replace of tokens, CSRF values, and authentication headers using regex pattern matching. It supports both XML and JSON formats, allowing you to streamline your testing procedures.</p>
+
+<h2>Features</h2>
+
+<ul>
+<li>Automatic token refresh: Regularly fetches fresh tokens every 4 minutes by default, adjustable based on token TTL. It also incorporates a per-request refresh useful for strict validation scenarios.</li>
+<li>Multiple pattern extraction: SWAPPER enables the use of multiple match/replace patterns, allowing diverse testing scenarios.</li>
+<li>Regex matching: Use regex to efficiently match and replace the desired patterns.</li>
+</ul>
+
+<h2>Usage</h2>
+
+<ul>
+<li>XML: SOAP API, Legacy systems, and SAML</li>
+<li>JSON: OAuth 2.0, REST APIs, GraphQL authentication, and Microsoft Graph API</li>
+<li>Advanced Patterns: Skillful in CSRF bypassing, MFA flows and per-request mode when session token is invalidated after single use. </li>
+</ul>
+
+<p>To utilize SWAPPER, select a token issuing request in Target/History and send it to SWAPPER. Modify the request details if necessary. You can then set up regex patterns for token extraction and replacement, even add multiple patterns if needed. Test your configuration and enable auto-refresh as well as the tools you want SWAPPER to swap tokens for.</p>
+
+<p>Remember to use the <code class=InlineCode>Test Token Request</code> button to verify your regex patterns and consult Logger/Logger++ to confirm your requests are being updated. Dont forget to save your configuration to capture any changes.</p>
