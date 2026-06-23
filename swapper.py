@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 from burp import IBurpExtender, IHttpListener, ITab, IContextMenuFactory, IExtensionStateListener
 from java.awt import BorderLayout, GridBagLayout, GridBagConstraints, Insets, Dimension, Color
-from javax.swing import JPanel, JLabel, JTextField, JTextArea, JCheckBox, JButton, JScrollPane, BorderFactory, JSpinner, SpinnerNumberModel, JMenuItem, SwingUtilities
-from java.awt.event import ActionListener
+from javax.swing import JPanel, JLabel, JTextField, JTextArea, JCheckBox, JButton, JScrollPane, BorderFactory, JSpinner, SpinnerNumberModel, JMenuItem, SwingUtilities, JComboBox, DefaultComboBoxModel
+from java.awt.event import ActionListener, ItemListener
 from java.util.concurrent import Executors, TimeUnit
 from javax.swing.event import DocumentListener as JDocumentListener, ChangeListener as JChangeListener
 import re
@@ -19,13 +19,23 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IContextMenuFactory, IExt
         callbacks.registerExtensionStateListener(self)
         self.token_lock = threading.Lock()
         self.scheduler = None
-        self.token_request_config = {
-            'host': 'the.host.net',
-            'port': 443,
-            'use_https': True,
-            'headers': [],
-            'body': ''
-        } 
+        self.token_endpoints = [
+            {
+                'poll': 1,
+                'host': 'the.host.net',
+                'port': 443,
+                'use_https': True,
+                'headers': 'Can build out your Request Headers here\nOr they will populate when you send to SWAPPER\n',
+                'body': 'You can build the request body here\nOr find the request to send in your history and send to SWAPPER\n'
+            }
+        ]
+        self.STOCK_HOST = 'the.host.net'
+        self.STOCK_HEADERS = 'Can build out your Request Headers here\nOr they will populate when you send to SWAPPER\n'
+        self.STOCK_BODY = 'You can build the request body here\nOr find the request to send in your history and send to SWAPPER\n'
+        self.replace_on_send = True
+        self.endpoint_panels = []
+        self._suppress_selector_event = False
+        self.selected_endpoint_index = 0
         self.response_regex = r'<sessionId>([^<]+)</sessionId>'
         self.request_regex = r'<sessionId>[^<]*</sessionId>'
         self.replacement_template = '<sessionId>{token}</sessionId>'
@@ -44,9 +54,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IContextMenuFactory, IExt
         self.fresh_token_per_request = True
         self.extension_enabled = False
         self.auto_refresh_enabled = True
-        self.refresh_interval = 240   
+        self.refresh_interval = 240
         self.current_token = None
-        self.current_tokens = {} 
+        self.current_tokens = {}
         self.token_last_updated = 0
         self._unsaved_changes = False
         self.createGUI()
@@ -153,7 +163,7 @@ JSYTJzaX2Ds2ClCwTyz5P4Gjx6CoKwBIdsEspog=
 
     def _attachDocChangeListener(self, text_component):
         text_component.getDocument().addDocumentListener(UnsavedDocListener(self))
-    
+
     def createGUI(self):
         self.panel = JPanel(BorderLayout())
         content_panel = JPanel(GridBagLayout())
@@ -168,20 +178,23 @@ JSYTJzaX2Ds2ClCwTyz5P4Gjx6CoKwBIdsEspog=
         instructions_section.setBorder(BorderFactory.createTitledBorder("Instructions"))
         instructions_section.setPreferredSize(Dimension(400, 300))
         self.instructions_area = JTextArea(15, 30)
-        self.instructions_area.setEditable(False)  
+        self.instructions_area.setEditable(False)
         self.instructions_area.setText("""SWAPPER
-                                 
+
 An extension for easy match/replace of tokens/CSRF/anything using regex. Handles XML and JSON. By default, SWAPPER sends a request to obtain the token/value every 4 minutes. You can change the time to request a new token. Disabling auto-refresh will request a token for each request(needed every now and again...). A new value will be requested for each interval. Can pull multiple patterns out of response and set multiple patterns to replace.
-        
+
+MULTIPLE ENDPOINTS:
+Add as many token endpoints as you need in the SWAPPER Configuration area. Each endpoint has a Poll # and endpoints are polled in ASCENDING order (1, then 2, then 3...) based on the interval. Use the Host dropdown at the top to switch which endpoint you are viewing/editing. Change an endpoint's Poll # to reorder it. The Regex Configuration is global so every enabled Response Regex is run against EVERY endpoint's response, meaning tokens accumulate across all endpoints.
+
 HOW TO USE:
 
 1. Right-click on any request in Target/History
-2. Select "Send to Swapper" to populate fields
+2. Select "Send to Swapper" to populate an fields. 
 3. Set up regex patterns for token extraction/replacement
 4. Test your configuration
 5. Enable tools and auto-refresh as needed
 
-To check regex matches, Test Token Request will send request and display regex hit/miss in status box. For the request, go to request you want to check in Proxy history/History/Target, right click and under extensions, select `Test Request Regex`. Resulting hit/miss will show in status box.                                  
+To check regex matches, Test Token Request will poll all endpoints and display regex hit/miss in status box. For the request, go to request you want to check in Proxy history/History/Target, right click and under extensions, select `Test Request Regex`. Resulting hit/miss will show in status box.
 """)
         self.instructions_area.setLineWrap(True)
         self.instructions_area.setWrapStyleWord(True)
@@ -189,56 +202,39 @@ To check regex matches, Test Token Request will send request and display regex h
         instructions_section.add(instructions_scroll, BorderLayout.CENTER)
         token_section = JPanel(BorderLayout())
         token_section.setBorder(BorderFactory.createTitledBorder("SWAPPER Configuration"))
-        token_section.setPreferredSize(Dimension(400, 300))   
-        token_config_panel = JPanel(GridBagLayout())
-        token_gbc = GridBagConstraints()
-        token_gbc.insets = Insets(3, 3, 3, 3)
-        token_gbc.anchor = GridBagConstraints.WEST
-        connection_panel = JPanel(GridBagLayout())
-        conn_gbc = GridBagConstraints()
-        conn_gbc.insets = Insets(2, 2, 2, 2)
-        conn_gbc.gridx = 0; conn_gbc.gridy = 0
-        connection_panel.add(JLabel("Host:"), conn_gbc)
-        conn_gbc.gridx = 1; conn_gbc.fill = GridBagConstraints.HORIZONTAL; conn_gbc.weightx = 1.0
-        self.host_field = JTextField(self.token_request_config['host'], 15)
-        connection_panel.add(self.host_field, conn_gbc)
-        conn_gbc.gridx = 2; conn_gbc.fill = GridBagConstraints.NONE; conn_gbc.weightx = 0
-        connection_panel.add(JLabel("Port:"), conn_gbc)
-        conn_gbc.gridx = 3; conn_gbc.fill = GridBagConstraints.HORIZONTAL; conn_gbc.weightx = 0.3
-        self.port_field = JTextField(str(self.token_request_config['port']), 6)
-        connection_panel.add(self.port_field, conn_gbc)
-        conn_gbc.gridx = 4; conn_gbc.fill = GridBagConstraints.NONE; conn_gbc.weightx = 0
-        self.https_checkbox = JCheckBox("HTTPS", self.token_request_config['use_https'])
-        connection_panel.add(self.https_checkbox, conn_gbc)
-        token_gbc.gridx = 0; token_gbc.gridy = 0; token_gbc.gridwidth = 2; token_gbc.fill = GridBagConstraints.HORIZONTAL; token_gbc.weightx = 1.0
-        token_config_panel.add(connection_panel, token_gbc)
-        token_gbc.gridx = 0; token_gbc.gridy = 1; token_gbc.gridwidth = 1; token_gbc.fill = GridBagConstraints.NONE; token_gbc.weightx = 0
-        token_config_panel.add(JLabel("Headers:"), token_gbc)
-        token_gbc.gridx = 0; token_gbc.gridy = 2; token_gbc.fill = GridBagConstraints.BOTH; token_gbc.weightx = 1.0; token_gbc.weighty = 0.4
-        self.headers_area = JTextArea(6, 30)
-        self.headers_area.setLineWrap(True)
-        self.headers_area.setWrapStyleWord(True)
-        self.headers_area.setText('''Can build out your Request Headers here
-Or they will populate when you send to SWAPPER
-''')
-        headers_scroll = JScrollPane(self.headers_area)
-        token_config_panel.add(headers_scroll, token_gbc)
-        token_gbc.gridx = 0; token_gbc.gridy = 3; token_gbc.weighty = 0
-        token_config_panel.add(JLabel("Body:"), token_gbc)
-        token_gbc.gridx = 0; token_gbc.gridy = 4; token_gbc.weighty = 0.6
-        self.body_area = JTextArea(8, 30)
-        self.body_area.setLineWrap(True)
-        self.body_area.setWrapStyleWord(True)
-        self.body_area.setText('''You can build the request body here
-Or find the request to send in your history and send to SWAPPER
-''')
-        body_scroll = JScrollPane(self.body_area)
-        token_config_panel.add(body_scroll, token_gbc)
-        token_section.add(token_config_panel, BorderLayout.CENTER)
+        token_section.setPreferredSize(Dimension(400, 300))
+        endpoint_top_bar = JPanel(GridBagLayout())
+        bar_gbc = GridBagConstraints()
+        bar_gbc.insets = Insets(2, 4, 2, 4)
+        bar_gbc.anchor = GridBagConstraints.WEST
+        bar_gbc.gridx = 0; bar_gbc.gridy = 0
+        endpoint_top_bar.add(JLabel("Host:"), bar_gbc)
+        bar_gbc.gridx = 1; bar_gbc.fill = GridBagConstraints.HORIZONTAL; bar_gbc.weightx = 1.0
+        self.host_selector_model = DefaultComboBoxModel()
+        self.host_selector = JComboBox(self.host_selector_model)
+        self.host_selector.addItemListener(HostSelectorListener(self))
+        endpoint_top_bar.add(self.host_selector, bar_gbc)
+        bar_gbc.gridx = 2; bar_gbc.fill = GridBagConstraints.NONE; bar_gbc.weightx = 0
+        self.replace_on_send_checkbox = JCheckBox("Replace on Send to SWAPPER", self.replace_on_send)
+        self.replace_on_send_checkbox.addActionListener(self)
+        endpoint_top_bar.add(self.replace_on_send_checkbox, bar_gbc)
+        token_section.add(endpoint_top_bar, BorderLayout.NORTH)
+        self.main_endpoint_panel = JPanel(BorderLayout())
+        endpoint_scroll = JScrollPane(self.main_endpoint_panel)
+        token_section.add(endpoint_scroll, BorderLayout.CENTER)
+        endpoint_button_panel = JPanel()
+        self.add_endpoint_button = JButton("Add Endpoint")
+        self.add_endpoint_button.addActionListener(self)
+        endpoint_button_panel.add(self.add_endpoint_button)
+        token_section.add(endpoint_button_panel, BorderLayout.SOUTH)
         top_gbc.gridx = 0; top_gbc.gridy = 0; top_gbc.fill = GridBagConstraints.BOTH; top_gbc.weightx = 0.5; top_gbc.weighty = 1.0
         top_panel.add(instructions_section, top_gbc)
         top_gbc.gridx = 1; top_gbc.weightx = 0.5
         top_panel.add(token_section, top_gbc)
+        self.selected_endpoint_index = 0
+        for ep in self.token_endpoints:
+            self._buildEndpointPanel(ep)
+        self.refreshEndpointDisplay()
         regex_section = JPanel(BorderLayout())
         regex_section.setBorder(BorderFactory.createTitledBorder("Regex Configuration"))
         self.main_regex_panel = JPanel(GridBagLayout())
@@ -326,11 +322,6 @@ Or find the request to send in your history and send to SWAPPER
         content_panel.add(status_scroll, gbc)
         scroll_pane = JScrollPane(content_panel)
         self.panel.add(scroll_pane, BorderLayout.CENTER)
-        self._attachDocChangeListener(self.host_field)
-        self._attachDocChangeListener(self.port_field)
-        self._attachChangeListener(self.https_checkbox)
-        self._attachDocChangeListener(self.headers_area)
-        self._attachDocChangeListener(self.body_area)
         self._attachChangeListener(self.scanner_checkbox)
         self._attachChangeListener(self.repeater_checkbox)
         self._attachChangeListener(self.intruder_checkbox)
@@ -338,6 +329,202 @@ Or find the request to send in your history and send to SWAPPER
         self._attachChangeListener(self.sequencer_checkbox)
         self._attachChangeListener(self.extender_checkbox)
         self.interval_spinner.addChangeListener(UnsavedSpinnerListener(self))
+    def _buildEndpointPanel(self, ep):
+        panel = JPanel(GridBagLayout())
+        panel.setBorder(BorderFactory.createTitledBorder("Endpoint"))
+        e_gbc = GridBagConstraints()
+        e_gbc.insets = Insets(3, 3, 3, 3)
+        e_gbc.anchor = GridBagConstraints.WEST
+
+        connection_panel = JPanel(GridBagLayout())
+        conn_gbc = GridBagConstraints()
+        conn_gbc.insets = Insets(2, 2, 2, 2)
+        conn_gbc.gridx = 0; conn_gbc.gridy = 0
+        connection_panel.add(JLabel("Poll:"), conn_gbc)
+        conn_gbc.gridx = 1; conn_gbc.fill = GridBagConstraints.NONE; conn_gbc.weightx = 0
+        poll_spinner = JSpinner(SpinnerNumberModel(int(ep.get('poll', 1)), 1, 999, 1))
+        connection_panel.add(poll_spinner, conn_gbc)
+        conn_gbc.gridx = 2; conn_gbc.fill = GridBagConstraints.NONE; conn_gbc.weightx = 0
+        connection_panel.add(JLabel("Host:"), conn_gbc)
+        conn_gbc.gridx = 3; conn_gbc.fill = GridBagConstraints.HORIZONTAL; conn_gbc.weightx = 1.0
+        host_field = JTextField(str(ep.get('host', '')), 15)
+        connection_panel.add(host_field, conn_gbc)
+        conn_gbc.gridx = 4; conn_gbc.fill = GridBagConstraints.NONE; conn_gbc.weightx = 0
+        connection_panel.add(JLabel("Port:"), conn_gbc)
+        conn_gbc.gridx = 5; conn_gbc.fill = GridBagConstraints.HORIZONTAL; conn_gbc.weightx = 0.3
+        port_field = JTextField(str(ep.get('port', 443)), 6)
+        connection_panel.add(port_field, conn_gbc)
+        conn_gbc.gridx = 6; conn_gbc.fill = GridBagConstraints.NONE; conn_gbc.weightx = 0
+        https_checkbox = JCheckBox("HTTPS", bool(ep.get('use_https', True)))
+        connection_panel.add(https_checkbox, conn_gbc)
+        e_gbc.gridx = 0; e_gbc.gridy = 0; e_gbc.gridwidth = 2
+        e_gbc.fill = GridBagConstraints.HORIZONTAL; e_gbc.weightx = 1.0
+        panel.add(connection_panel, e_gbc)
+        e_gbc.gridx = 0; e_gbc.gridy = 1; e_gbc.gridwidth = 2; e_gbc.fill = GridBagConstraints.NONE; e_gbc.weightx = 0
+        panel.add(JLabel("Headers:"), e_gbc)
+        e_gbc.gridx = 0; e_gbc.gridy = 2; e_gbc.fill = GridBagConstraints.BOTH; e_gbc.weightx = 1.0; e_gbc.weighty = 0.4
+        headers_area = JTextArea(5, 30)
+        headers_area.setLineWrap(True)
+        headers_area.setWrapStyleWord(True)
+        headers_area.setText(str(ep.get('headers', '')))
+        panel.add(JScrollPane(headers_area), e_gbc)
+
+        e_gbc.gridx = 0; e_gbc.gridy = 3; e_gbc.weighty = 0; e_gbc.fill = GridBagConstraints.NONE
+        panel.add(JLabel("Body:"), e_gbc)
+        e_gbc.gridx = 0; e_gbc.gridy = 4; e_gbc.fill = GridBagConstraints.BOTH; e_gbc.weightx = 1.0; e_gbc.weighty = 0.6
+        body_area = JTextArea(6, 30)
+        body_area.setLineWrap(True)
+        body_area.setWrapStyleWord(True)
+        body_area.setText(str(ep.get('body', '')))
+        panel.add(JScrollPane(body_area), e_gbc)
+        ctrl_panel = JPanel()
+        remove_button = JButton("Remove This Endpoint")
+        remove_button.addActionListener(EndpointRemoveHandler(self, panel))
+        ctrl_panel.add(remove_button)
+        e_gbc.gridx = 0; e_gbc.gridy = 5; e_gbc.weighty = 0; e_gbc.fill = GridBagConstraints.NONE
+        panel.add(ctrl_panel, e_gbc)
+        self._attachDocChangeListener(host_field)
+        self._attachDocChangeListener(port_field)
+        self._attachChangeListener(https_checkbox)
+        self._attachDocChangeListener(headers_area)
+        self._attachDocChangeListener(body_area)
+        poll_spinner.addChangeListener(PollChangeListener(self))
+
+        ep_data = {
+            'panel': panel,
+            'poll_spinner': poll_spinner,
+            'host_field': host_field,
+            'port_field': port_field,
+            'https_checkbox': https_checkbox,
+            'headers_area': headers_area,
+            'body_area': body_area
+        }
+        self.endpoint_panels.append(ep_data)
+        return ep_data
+
+    def _endpointLabel(self, idx, ep_data):
+        poll = ep_data['poll_spinner'].getValue()
+        host = ep_data['host_field'].getText().strip() or "(no host)"
+        return "Poll %s - %s" % (poll, host)
+
+    def _sortEndpointsByPoll(self):
+        decorated = []
+        for i, ep_data in enumerate(self.endpoint_panels):
+            try:
+                poll = int(ep_data['poll_spinner'].getValue())
+            except:
+                poll = 1
+            decorated.append((poll, i, ep_data))
+        decorated.sort(key=lambda t: (t[0], t[1]))
+        self.endpoint_panels = [d[2] for d in decorated]
+
+    def _rebuildHostSelector(self):
+        self.host_selector_model.removeAllElements()
+        for i, ep_data in enumerate(self.endpoint_panels):
+            self.host_selector_model.addElement(self._endpointLabel(i, ep_data))
+        if self.endpoint_panels:
+            if self.selected_endpoint_index >= len(self.endpoint_panels):
+                self.selected_endpoint_index = len(self.endpoint_panels) - 1
+            if self.selected_endpoint_index < 0:
+                self.selected_endpoint_index = 0
+            self.host_selector.setSelectedIndex(self.selected_endpoint_index)
+
+    def refreshEndpointDisplay(self):
+        self._sortEndpointsByPoll()
+        self._suppress_selector_event = True
+        self._rebuildHostSelector()
+        self._suppress_selector_event = False
+        self._showSelectedEndpoint()
+
+    def _showSelectedEndpoint(self):
+        self.main_endpoint_panel.removeAll()
+        if self.endpoint_panels:
+            idx = self.selected_endpoint_index
+            if idx < 0 or idx >= len(self.endpoint_panels):
+                idx = 0
+                self.selected_endpoint_index = 0
+            ep_data = self.endpoint_panels[idx]
+            ep_data['panel'].setBorder(BorderFactory.createTitledBorder(
+                "Endpoint (%s)" % self._endpointLabel(idx, ep_data)))
+            self.main_endpoint_panel.add(ep_data['panel'], BorderLayout.CENTER)
+        self.main_endpoint_panel.revalidate()
+        self.main_endpoint_panel.repaint()
+        self.panel.revalidate()
+        self.panel.repaint()
+
+    def onHostSelected(self, index):
+        if getattr(self, '_suppress_selector_event', False):
+            return
+        if index is None or index < 0:
+            return
+        self.selected_endpoint_index = index
+        self._showSelectedEndpoint()
+
+    def onPollChanged(self):
+        if not hasattr(self, 'host_selector'):
+            return
+        current = None
+        if 0 <= self.selected_endpoint_index < len(self.endpoint_panels):
+            current = self.endpoint_panels[self.selected_endpoint_index]
+        self._sortEndpointsByPoll()
+        if current is not None and current in self.endpoint_panels:
+            self.selected_endpoint_index = self.endpoint_panels.index(current)
+        self._suppress_selector_event = True
+        self._rebuildHostSelector()
+        self._suppress_selector_event = False
+        self._showSelectedEndpoint()
+        self._markUnsaved()
+
+    def _nextPollNumber(self):
+        highest = 0
+        for ep_data in self.endpoint_panels:
+            try:
+                v = int(ep_data['poll_spinner'].getValue())
+                if v > highest:
+                    highest = v
+            except:
+                pass
+        return highest + 1
+
+    def addEndpoint(self, ep=None, select_new=True):
+        if ep is None:
+            ep = {'host': '', 'port': 443, 'use_https': True, 'headers': '', 'body': ''}
+        if 'poll' not in ep:
+            ep['poll'] = self._nextPollNumber()
+        new_ep = self._buildEndpointPanel(ep)
+        if select_new:
+            self._sortEndpointsByPoll()
+            self.selected_endpoint_index = self.endpoint_panels.index(new_ep)
+        self.refreshEndpointDisplay()
+        self._markUnsaved()
+        return new_ep
+
+    def _findEndpointByPanel(self, panel):
+        for idx, ep_data in enumerate(self.endpoint_panels):
+            if ep_data['panel'] == panel:
+                return idx
+        return -1
+
+    def removeEndpoint(self, panel):
+        idx = self._findEndpointByPanel(panel)
+        if idx < 0:
+            return
+        if len(self.endpoint_panels) <= 1:
+            self.addStatus("Cannot remove the last endpoint")
+            return
+        del self.endpoint_panels[idx]
+        if self.selected_endpoint_index >= len(self.endpoint_panels):
+            self.selected_endpoint_index = len(self.endpoint_panels) - 1
+        self.refreshEndpointDisplay()
+        self._markUnsaved()
+
+    def _isStockEndpoint(self, ep_data):
+        host = ep_data['host_field'].getText().strip()
+        headers = ep_data['headers_area'].getText()
+        body = ep_data['body_area'].getText()
+        return (host == self.STOCK_HOST and
+                headers == self.STOCK_HEADERS and
+                body == self.STOCK_BODY)
 
     def createRegexPair(self, index):
         pair_panel = JPanel(GridBagLayout())
@@ -374,7 +561,7 @@ Or find the request to send in your history and send to SWAPPER
             'response_field': response_field,
             'request_field': request_field,
             'replacement_field': replacement_field
-        } 
+        }
         self.regex_pair_panels.append(pair_data)
         main_gbc = GridBagConstraints()
         main_gbc.gridx = 0; main_gbc.gridy = len(self.regex_pair_panels) - 1
@@ -394,7 +581,7 @@ Or find the request to send in your history and send to SWAPPER
             self.main_regex_panel.add(pair_data['panel'], main_gbc)
         self.panel.revalidate()
         self.panel.repaint()
-    
+
     def actionPerformed(self, event):
         if event.getSource() == self.test_button:
             self.testTokenRequest()
@@ -405,20 +592,24 @@ Or find the request to send in your history and send to SWAPPER
         elif event.getSource() == self.enable_extension_checkbox:
             self.toggleExtension()
         elif event.getSource() == self.add_regex_button:
-            self.addRegexPair()    
-            
+            self.addRegexPair()
+        elif event.getSource() == self.add_endpoint_button:
+            self.addEndpoint()
+        elif event.getSource() == self.replace_on_send_checkbox:
+            self.replace_on_send = self.replace_on_send_checkbox.isSelected()
+
     def addRegexPair(self):
         new_index = len(self.regex_pair_panels)
         self.regex_pairs.append({'response': '', 'request': '', 'replacement': '{token}'})
         self.createRegexPair(new_index)
         self._markUnsaved()
-    
+
     def testTokenRequest(self):
         self.addStatus("Testing token request...")
         thread = threading.Thread(target=self._testTokenRequestBackground)
         thread.daemon = True
         thread.start()
-    
+
     def _testTokenRequestBackground(self):
         try:
             tokens_result = self._getNewTokenSync()
@@ -434,7 +625,7 @@ Or find the request to send in your history and send to SWAPPER
                 self.addStatus("Could not retrieve any tokens")
         except Exception as e:
             self.addStatus("Error in background token test: %s" % str(e))
-    
+
     def toggleExtension(self):
         self.extension_enabled = self.enable_extension_checkbox.isSelected()
         if self.extension_enabled:
@@ -443,18 +634,35 @@ Or find the request to send in your history and send to SWAPPER
         else:
             self._syncTimerState()
             self.addStatus("Extension DISABLED")
-    
+
     def saveConfiguration(self):
-        self.token_request_config['host'] = self.host_field.getText()
-        self.token_request_config['port'] = int(self.port_field.getText())
-        self.token_request_config['use_https'] = self.https_checkbox.isSelected()
+        self.refreshEndpointDisplay()
+        self.token_endpoints = []
+        for ep_data in self.endpoint_panels:
+            try:
+                port_val = int(ep_data['port_field'].getText().strip())
+            except:
+                port_val = 0
+            try:
+                poll_val = int(ep_data['poll_spinner'].getValue())
+            except:
+                poll_val = 1
+            self.token_endpoints.append({
+                'poll': poll_val,
+                'host': ep_data['host_field'].getText().strip(),
+                'port': port_val,
+                'use_https': ep_data['https_checkbox'].isSelected(),
+                'headers': ep_data['headers_area'].getText(),
+                'body': ep_data['body_area'].getText()
+            })
+        self.replace_on_send = self.replace_on_send_checkbox.isSelected()
         self.regex_pairs = []
         for pair_data in self.regex_pair_panels:
             self.regex_pairs.append({
                 'response': pair_data['response_field'].getText(),
                 'request': pair_data['request_field'].getText(),
                 'replacement': pair_data['replacement_field'].getText()
-            })               
+            })
         self.enabled_tools['scanner'] = self.scanner_checkbox.isSelected()
         self.enabled_tools['repeater'] = self.repeater_checkbox.isSelected()
         self.enabled_tools['intruder'] = self.intruder_checkbox.isSelected()
@@ -466,8 +674,8 @@ Or find the request to send in your history and send to SWAPPER
         if old_interval != self.refresh_interval and self.scheduler is not None:
             self._syncTimerState()
         self._markSaved()
-        self.addStatus("Configuration saved successfully")
-    
+        self.addStatus("Configuration saved successfully (%d endpoints)" % len(self.token_endpoints))
+
     def toggleAutoRefresh(self):
         self.auto_refresh_enabled = self.auto_refresh_checkbox.isSelected()
         self._syncTimerState()
@@ -490,53 +698,86 @@ Or find the request to send in your history and send to SWAPPER
         cleaned = request_string.replace('\r\n', '\n').replace('\r', '\n')
         return cleaned
 
+    def _applyChainPlaceholders(self, text, tokens_so_far):
+        if not text:
+            return text
+        for pair_index, token_value in tokens_so_far.items():
+            text = text.replace('{token%d}' % (pair_index + 1), token_value)
+        return text
+
     def _getNewTokenSync(self):
         try:
-            host = str(self.host_field.getText()).strip()
-            port_text = str(self.port_field.getText()).strip()
-            if not host or not port_text:
+            endpoints = []
+            for ep_data in self.endpoint_panels:
+                try:
+                    poll_val = int(ep_data['poll_spinner'].getValue())
+                except:
+                    poll_val = 1
+                endpoints.append({
+                    'poll': poll_val,
+                    'host': str(ep_data['host_field'].getText()).strip(),
+                    'port_text': str(ep_data['port_field'].getText()).strip(),
+                    'use_https': ep_data['https_checkbox'].isSelected(),
+                    'headers_text': str(ep_data['headers_area'].getText()),
+                    'body_text': str(ep_data['body_area'].getText())
+                })
+            endpoints.sort(key=lambda e: e['poll'])
+            if not endpoints:
                 return False
-            try:
-                port = int(port_text)
-            except:
-                return False
-            use_https = self.https_checkbox.isSelected()
-            headers_text = str(self.headers_area.getText())
-            if not headers_text.strip():
-                return False
-            headers = []
-            for line in headers_text.split('\n'):
-                line = line.strip()
-                if line:
-                    headers.append(line)
-            body = str(self.body_area.getText())
-            message = self.helpers.buildHttpMessage(headers, self.helpers.stringToBytes(body))
-            service = self.helpers.buildHttpService(host, port, use_https)
-            response = self.callbacks.makeHttpRequest(service, message)
-            if response is None:
-                return False
-            resp_str = self.helpers.bytesToString(response.getResponse())
-            resp_str_clean = self.cleanHttpResponse(resp_str)
+
             enabled_pairs = []
             for i, pair_data in enumerate(self.regex_pair_panels):
                 if pair_data['enabled'].isSelected():
                     enabled_pairs.append((i, pair_data))
             if not enabled_pairs:
                 return False
+
             extracted_tokens = {}
-            for pair_index, pair_data in enabled_pairs:
-                pattern = str(pair_data['response_field'].getText()).strip()
-                if not pattern:
+            for ep_num, ep in enumerate(endpoints):
+                host = ep['host']
+                if not host or not ep['port_text']:
                     continue
                 try:
-                    match = re.search(pattern, resp_str_clean, re.IGNORECASE)
-                    if match and len(match.groups()) > 0:
-                        token = match.group(1).strip()
-                        extracted_tokens[pair_index] = token
-                        print("Got token from pair %d: %s" % (pair_index + 1, token))
-                except Exception as e:
-                    print("Error in pair %d regex: %s" % (pair_index + 1, str(e)))
+                    port = int(ep['port_text'])
+                except:
                     continue
+
+                headers_text = self._applyChainPlaceholders(ep['headers_text'], extracted_tokens)
+                body_text = self._applyChainPlaceholders(ep['body_text'], extracted_tokens)
+                if not headers_text.strip():
+                    continue
+                headers = []
+                for line in headers_text.split('\n'):
+                    line = line.strip()
+                    if line:
+                        headers.append(line)
+
+                try:
+                    message = self.helpers.buildHttpMessage(headers, self.helpers.stringToBytes(body_text))
+                    service = self.helpers.buildHttpService(host, port, ep['use_https'])
+                    response = self.callbacks.makeHttpRequest(service, message)
+                except Exception as e:
+                    print("Endpoint #%d request error: %s" % (ep_num + 1, str(e)))
+                    continue
+                if response is None:
+                    continue
+                resp_str = self.helpers.bytesToString(response.getResponse())
+                resp_str_clean = self.cleanHttpResponse(resp_str)
+
+                for pair_index, pair_data in enabled_pairs:
+                    pattern = str(pair_data['response_field'].getText()).strip()
+                    if not pattern:
+                        continue
+                    try:
+                        match = re.search(pattern, resp_str_clean, re.IGNORECASE)
+                        if match and len(match.groups()) > 0:
+                            token = match.group(1).strip()
+                            extracted_tokens[pair_index] = token
+                            print("Got token from endpoint %d, pair %d: %s" % (ep_num + 1, pair_index + 1, token))
+                    except Exception as e:
+                        print("Error in pair %d regex (endpoint %d): %s" % (pair_index + 1, ep_num + 1, str(e)))
+                        continue
+
             if extracted_tokens:
                 with self.token_lock:
                     self.current_tokens = extracted_tokens
@@ -549,94 +790,102 @@ Or find the request to send in your history and send to SWAPPER
 
     def getNewToken(self):
         try:
-            host = self.host_field.getText().strip()
-            port_text = self.port_field.getText().strip()
-            self.addStatus("Getting token from %s:%s" % (host, port_text))
-            if not host:
-                self.addStatus("ERROR: Host field is empty!")
-                return None  
-            if not port_text:
-                self.addStatus("ERROR: Port field is empty!")
-                return None  
-            try:
-                port = int(port_text)
-            except:
-                self.addStatus("ERROR: Invalid port number: %s" % port_text)
-                return None   
-            use_https = self.https_checkbox.isSelected()
-            headers_text = self.headers_area.getText()
-            if not headers_text.strip():
-                self.addStatus("ERROR: Headers field is empty!")
-                return None 
-            headers = []
-            for line in headers_text.split('\n'):
-                line = line.strip()
-                if line:
-                    headers.append(line)
-            body = self.body_area.getText()
-            try:
-                message = self.helpers.buildHttpMessage(headers, self.helpers.stringToBytes(body))
-            except Exception as e:
-                self.addStatus("ERROR building HTTP message: %s" % str(e))
+            endpoints = []
+            for ep_data in self.endpoint_panels:
+                try:
+                    poll_val = int(ep_data['poll_spinner'].getValue())
+                except:
+                    poll_val = 1
+                endpoints.append({
+                    'poll': poll_val,
+                    'host': ep_data['host_field'].getText().strip(),
+                    'port_text': ep_data['port_field'].getText().strip(),
+                    'use_https': ep_data['https_checkbox'].isSelected(),
+                    'headers_text': ep_data['headers_area'].getText(),
+                    'body_text': ep_data['body_area'].getText()
+                })
+            endpoints.sort(key=lambda e: e['poll'])
+            if not endpoints:
+                self.addStatus("ERROR: No endpoints configured!")
                 return None
-            try:
-                service = self.helpers.buildHttpService(host, port, use_https)
-            except Exception as e:
-                self.addStatus("ERROR building HTTP service: %s" % str(e))
-                return None
-            try:
-                response = self.callbacks.makeHttpRequest(service, message)
-            except Exception as e:
-                self.addStatus("ERROR making HTTP request: %s" % str(e))
-                return None
-            if response is None:
-                self.addStatus("ERROR: Response is None")
-                return None
-            try:
-                resp_str = self.helpers.bytesToString(response.getResponse())
-            except Exception as e:
-                self.addStatus("ERROR converting response: %s" % str(e))
-                return None
-            enabled_pairs = [pair for pair in self.regex_pair_panels if pair['enabled'].isSelected()]
+
+            enabled_pairs = [(i, p) for i, p in enumerate(self.regex_pair_panels) if p['enabled'].isSelected()]
             if not enabled_pairs:
                 self.addStatus("ERROR: No regex pairs are enabled!")
                 return None
+
             extracted_tokens = {}
-            for pair_index, pair_data in enumerate(enabled_pairs):
-                pattern = pair_data['response_field'].getText().strip()
-                if not pattern:
-                    self.addStatus("WARNING: Pair %d response regex is empty, skipping" % (pair_index + 1)) 
-                    continue                                                                               
-                self.addStatus("Trying pattern from pair %d: %s" % (pair_index + 1, pattern))    
+            for ep_num, ep in enumerate(endpoints):
+                host = ep['host']
+                port_text = ep['port_text']
+                self.addStatus("Endpoint #%d: getting token from %s:%s" % (ep_num + 1, host, port_text))
+                if not host:
+                    self.addStatus("  ERROR: Host field is empty, skipping")
+                    continue
+                if not port_text:
+                    self.addStatus("  ERROR: Port field is empty, skipping")
+                    continue
                 try:
-                    match = re.search(pattern, resp_str, re.IGNORECASE)
-                    if match:
-                        token = match.group(1).strip()
-                        extracted_tokens[pair_index] = token                                       
-                        self.addStatus("Found token using pair %d: %s" % (pair_index + 1, token))  
-                        print("Got token from pair %d: %s" % (pair_index + 1, token))             
-                    else:
-                        self.addStatus("No token found with pair %d pattern: %s" % (pair_index + 1, pattern))  
+                    port = int(port_text)
+                except:
+                    self.addStatus("  ERROR: Invalid port number: %s" % port_text)
+                    continue
+
+                headers_text = self._applyChainPlaceholders(ep['headers_text'], extracted_tokens)
+                body_text = self._applyChainPlaceholders(ep['body_text'], extracted_tokens)
+                if not headers_text.strip():
+                    self.addStatus("  ERROR: Headers field is empty, skipping")
+                    continue
+                headers = []
+                for line in headers_text.split('\n'):
+                    line = line.strip()
+                    if line:
+                        headers.append(line)
+                try:
+                    message = self.helpers.buildHttpMessage(headers, self.helpers.stringToBytes(body_text))
+                    service = self.helpers.buildHttpService(host, port, ep['use_https'])
+                    response = self.callbacks.makeHttpRequest(service, message)
                 except Exception as e:
-                    self.addStatus("ERROR in pair %d regex search: %s" % (pair_index + 1, str(e)))   
-            if extracted_tokens:                                                                   
-                self.current_tokens = extracted_tokens  
-                self.token_last_updated = time.time()                                             
-                self.addStatus("Extracted %d tokens total" % len(extracted_tokens))     
-                return True                                
-            else:                                                                                  
-                self.addStatus("No tokens found from any of the %d enabled pairs" % len(enabled_pairs))  
-                preview = resp_str[:1000] if len(resp_str) > 1000 else resp_str                   
-                self.addStatus("Response preview (first 1000 chars):")                            
-                self.addStatus(preview)                                                            
-                self.addStatus("--- End of response preview ---")                                 
-                return None                                                                        
+                    self.addStatus("  ERROR making request: %s" % str(e))
+                    continue
+                if response is None:
+                    self.addStatus("  ERROR: Response is None")
+                    continue
+                try:
+                    resp_str = self.helpers.bytesToString(response.getResponse())
+                except Exception as e:
+                    self.addStatus("  ERROR converting response: %s" % str(e))
+                    continue
+
+                for pair_index, pair_data in enabled_pairs:
+                    pattern = pair_data['response_field'].getText().strip()
+                    if not pattern:
+                        continue
+                    try:
+                        match = re.search(pattern, resp_str, re.IGNORECASE)
+                        if match:
+                            token = match.group(1).strip()
+                            extracted_tokens[pair_index] = token
+                            self.addStatus("  Found token (pair %d): %s" % (pair_index + 1, token))
+                        else:
+                            self.addStatus("  No match for pair %d: %s" % (pair_index + 1, pattern))
+                    except Exception as e:
+                        self.addStatus("  ERROR in pair %d regex: %s" % (pair_index + 1, str(e)))
+
+            if extracted_tokens:
+                self.current_tokens = extracted_tokens
+                self.token_last_updated = time.time()
+                self.addStatus("Extracted %d tokens total across %d endpoints" % (len(extracted_tokens), len(endpoints)))
+                return True
+            else:
+                self.addStatus("No tokens found from any endpoint")
+                return None
         except Exception as e:
             error_msg = "Error getting token: %s" % str(e)
             print(error_msg)
             self.addStatus(error_msg)
             return None
-        
+
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
         if not messageIsRequest or not self.extension_enabled:
             return
@@ -661,20 +910,20 @@ Or find the request to send in your history and send to SWAPPER
                 if request_pattern and re.search(request_pattern, req_str_clean):
                     matching_pairs.append((pair_index, pair_data, request_pattern))
         if not matching_pairs:
-            return 
+            return
         need_fresh_tokens = not self.auto_refresh_enabled
         if self.auto_refresh_enabled:
             with self.token_lock:
                 current_time = time.time()
-                if (not self.current_tokens or 
+                if (not self.current_tokens or
                     (current_time - self.token_last_updated) >= self.refresh_interval):
                     need_fresh_tokens = True
         if need_fresh_tokens:
-            tokens_result = self._getNewTokenSync() 
+            tokens_result = self._getNewTokenSync()
             if not tokens_result:
                 with self.token_lock:
                     if not self.current_tokens:
-                        return  
+                        return
         with self.token_lock:
             if self.current_tokens:
                 for pair_index, pair_data, request_pattern in matching_pairs:
@@ -688,29 +937,29 @@ Or find the request to send in your history and send to SWAPPER
                             replaced_count += 1
         if replaced_count > 0:
             messageInfo.setRequest(self.helpers.stringToBytes(req_str))
-        
+
     def getToolName(self, toolFlag):
         tool_names = {
             self.callbacks.TOOL_SCANNER: "Scanner",
-            self.callbacks.TOOL_REPEATER: "Repeater", 
+            self.callbacks.TOOL_REPEATER: "Repeater",
             self.callbacks.TOOL_INTRUDER: "Intruder",
             self.callbacks.TOOL_TARGET: "Target",
             self.callbacks.TOOL_SEQUENCER: "Sequencer",
             self.callbacks.TOOL_EXTENDER: "Extender"
         }
         return tool_names.get(toolFlag, "Unknown")
-    
+
     def getTabCaption(self):
         return "SWAPPER"
-    
+
     def getUiComponent(self):
         return self.panel
-    
+
     def createMenuItems(self, invocation):
         menu_items = []
         if invocation.getInvocationContext() in [
             invocation.CONTEXT_TARGET_SITE_MAP_TABLE,
-            invocation.CONTEXT_TARGET_SITE_MAP_TREE, 
+            invocation.CONTEXT_TARGET_SITE_MAP_TREE,
             invocation.CONTEXT_PROXY_HISTORY,
             invocation.CONTEXT_MESSAGE_EDITOR_REQUEST,
             invocation.CONTEXT_MESSAGE_EDITOR_RESPONSE,
@@ -724,63 +973,95 @@ Or find the request to send in your history and send to SWAPPER
             regex_test_item.addActionListener(RegexTestHandler(self, invocation))
             menu_items.append(regex_test_item)
         return menu_items
-    
+
     def populateFromRequest(self, request_response):
         try:
             request = request_response.getRequest()
             service = request_response.getHttpService()
-            request_info = self.helpers.analyzeRequest(service, request) 
+            request_info = self.helpers.analyzeRequest(service, request)
             host = service.getHost()
             port = service.getPort()
             use_https = service.getProtocol() == "https"
-            self.host_field.setText(host)
-            self.port_field.setText(str(port))
-            self.https_checkbox.setSelected(use_https)
             headers = request_info.getHeaders()
             headers_text = "\n".join(headers)
-            self.headers_area.setText(headers_text)
             body_offset = request_info.getBodyOffset()
             request_bytes = request_response.getRequest()
             if body_offset < len(request_bytes):
                 body_bytes = request_bytes[body_offset:]
                 body_text = self.helpers.bytesToString(body_bytes)
-                self.body_area.setText(body_text)
             else:
-                self.body_area.setText("")
-            self._markUnsaved()
-            self.addStatus("Populated configuration from %s %s://%s:%s" % (request_info.getMethod(), service.getProtocol(), host, port)) 
+                body_text = ""
+
+            new_ep = {
+                'host': host,
+                'port': port,
+                'use_https': use_https,
+                'headers': headers_text,
+                'body': body_text
+            }
+
+            def _fill_panel(ep_data):
+                ep_data['host_field'].setText(host)
+                ep_data['port_field'].setText(str(port))
+                ep_data['https_checkbox'].setSelected(use_https)
+                ep_data['headers_area'].setText(headers_text)
+                ep_data['body_area'].setText(body_text)
+
+            def _do_add():
+                target = None
+                if self.replace_on_send_checkbox.isSelected():
+                    idx = self.selected_endpoint_index
+                    if 0 <= idx < len(self.endpoint_panels) and self._isStockEndpoint(self.endpoint_panels[idx]):
+                        target = self.endpoint_panels[idx]
+                    else:
+                        for ep_data in self.endpoint_panels:
+                            if self._isStockEndpoint(ep_data):
+                                target = ep_data
+                                break
+
+                if target is not None:
+                    _fill_panel(target)
+                    self.selected_endpoint_index = self.endpoint_panels.index(target)
+                    self.refreshEndpointDisplay()
+                    self._markUnsaved()
+                    self.addStatus("Replaced stock endpoint with %s %s://%s:%s" % (
+                        request_info.getMethod(), service.getProtocol(), host, port))
+                else:
+                    self.addEndpoint(new_ep)
+                    self.addStatus("Added endpoint from %s %s://%s:%s" % (
+                        request_info.getMethod(), service.getProtocol(), host, port))
+            SwingUtilities.invokeLater(_AddEndpointRunnable(_do_add))
         except Exception as e:
             self.addStatus("Error populating from request: %s" % str(e))
 
     def testRequestRegexOnMessage(self, request_response):
-        enabled_pairs = [pair for pair in self.regex_pair_panels if pair['enabled'].isSelected()]    
-        if not enabled_pairs:                                                                        
+        enabled_pairs = [pair for pair in self.regex_pair_panels if pair['enabled'].isSelected()]
+        if not enabled_pairs:
             self.addStatus("ERROR: No regex pairs are enabled!")
             return
         try:
             request = request_response.getRequest()
             req_str = self.helpers.bytesToString(request)
-            found_matches = []                                                        
-            for i, pair_data in enumerate(enabled_pairs):                                           
-                pattern = pair_data['request_field'].getText().strip()                              
-                if not pattern:                                                                     
-                    continue                                                                         
-                try:                                                                  
+            found_matches = []
+            for i, pair_data in enumerate(enabled_pairs):
+                pattern = pair_data['request_field'].getText().strip()
+                if not pattern:
+                    continue
+                try:
                     match = re.search(pattern, req_str)
                     if match:
-                        found_matches.append((i+1, pattern, match.group(0)))         
-                except Exception as e:                                                
-                    self.addStatus("ERROR in pair %d pattern '%s': %s" % (i+1, pattern, str(e)))   
-            if found_matches:                                                         
+                        found_matches.append((i+1, pattern, match.group(0)))
+                except Exception as e:
+                    self.addStatus("ERROR in pair %d pattern '%s': %s" % (i+1, pattern, str(e)))
+            if found_matches:
                 self.addStatus("Found %d matching patterns!" % len(found_matches))
-                for pair_num, pattern, matched_content in found_matches:             
-                    self.addStatus("Pair %d '%s' matched: '%s'" % (pair_num, pattern, matched_content))  
+                for pair_num, pattern, matched_content in found_matches:
+                    self.addStatus("Pair %d '%s' matched: '%s'" % (pair_num, pattern, matched_content))
             else:
-                self.addStatus("None of the enabled patterns matched")                       
+                self.addStatus("None of the enabled patterns matched")
                 self.addStatus("Request preview: %s..." % req_str[:300])
         except Exception as e:
-            self.addStatus("ERROR testing regex: %s" % str(e))   
-
+            self.addStatus("ERROR testing regex: %s" % str(e))
 
 from java.lang import Runnable
 
@@ -790,13 +1071,17 @@ class ScheduledRefreshTask(Runnable):
     def run(self):
         self.extender._onRefreshTimerFire()
 
+class _AddEndpointRunnable(Runnable):
+    def __init__(self, fn):
+        self.fn = fn
+    def run(self):
+        self.fn()
 
 class UnsavedChangeListener(ActionListener):
     def __init__(self, extender):
         self.extender = extender
     def actionPerformed(self, event):
         self.extender._markUnsaved()
-
 
 class UnsavedDocListener(JDocumentListener):
     def __init__(self, extender):
@@ -808,13 +1093,32 @@ class UnsavedDocListener(JDocumentListener):
     def changedUpdate(self, event):
         self.extender._markUnsaved()
 
-
 class UnsavedSpinnerListener(JChangeListener):
     def __init__(self, extender):
         self.extender = extender
     def stateChanged(self, event):
         self.extender._markUnsaved()
 
+class HostSelectorListener(ItemListener):
+    def __init__(self, extender):
+        self.extender = extender
+    def itemStateChanged(self, event):
+        from java.awt.event import ItemEvent
+        if event.getStateChange() == ItemEvent.SELECTED:
+            self.extender.onHostSelected(self.extender.host_selector.getSelectedIndex())
+
+class PollChangeListener(JChangeListener):
+    def __init__(self, extender):
+        self.extender = extender
+    def stateChanged(self, event):
+        self.extender.onPollChanged()
+
+class EndpointRemoveHandler(ActionListener):
+    def __init__(self, extender, panel):
+        self.extender = extender
+        self.panel = panel
+    def actionPerformed(self, event):
+        self.extender.removeEndpoint(self.panel)
 
 class TokenMenuHandler(ActionListener):
     def __init__(self, extender, invocation):
@@ -824,7 +1128,6 @@ class TokenMenuHandler(ActionListener):
         selected_messages = self.invocation.getSelectedMessages()
         if selected_messages and len(selected_messages) > 0:
             self.extender.populateFromRequest(selected_messages[0])
-
 
 class RegexTestHandler(ActionListener):
     def __init__(self, extender, invocation):
