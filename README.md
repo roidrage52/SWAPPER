@@ -1,4 +1,5 @@
-# SWAPPER
+# SWAPPER  
+![Version](https://img.shields.io/badge/version-1.1.0-green)  
 
 A Burp Suite Extension for automated match and replace of tokens, CSRF values, and authentication headers using regex pattern matching. **Supports both XML and JSON formats**.
 
@@ -6,6 +7,7 @@ A Burp Suite Extension for automated match and replace of tokens, CSRF values, a
 - **Automatic token refresh:** Fetches fresh tokens every 4 minutes (240 seconds) by default  - adjustable based on token TTL. Has a per-request refresh that can be used for strict validation scenarios.
 - **Multipe pattern extraction:** SWAPPER supports multiple match/replace patterns. Use as many patterns as you want
 - **Regex matching:** Because who doesn't love using regex!  
+- **Supports multiple endpoints:** Need a CSRF token from one endpoint and a session token from another? SWAPPER supports obtaining values from multiple endpoints.  
 
 ### Use Cases
 - **XML:** SOAP API, Legacy systems, SAML
@@ -74,3 +76,8 @@ Verify the token that was issued in the SWAPPER request.
 Ensure the token issued was used in the Intruder attack.  
 
 ![New Token](/images/new_token.png)    
+
+## Changelog  
+
+### V1.1.0  
+- Added support to extract tokens from multiple hosts  
